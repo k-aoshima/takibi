@@ -9,18 +9,34 @@ import SwiftUI
 
 @main
 struct takibiApp: App {
+    @StateObject private var multipeerManager = MultipeerManager()
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
+                .environmentObject(multipeerManager)
                 .onAppear {
-                    // MultipeerConnectivityの設定をここで行う
+                    // アプリ起動時に即座に権限要求を実行
                     configureMultipeerConnectivity()
                 }
         }
     }
     
     private func configureMultipeerConnectivity() {
-        // この関数は将来的にMultipeerConnectivityの設定が必要な場合に使用
-        print("Multipeer Connectivity configured")
+        print("🚀 App launched - Configuring Multipeer Connectivity")
+        print("📱 Device: \(UIDevice.current.name)")
+        print("🔧 iOS: \(UIDevice.current.systemVersion)")
+        
+        // 1. アプリ起動直後に権限要求
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            print("⚡ Requesting permission immediately after app launch")
+            multipeerManager.requestLocalNetworkPermissionIfNeeded()
+        }
+        
+        // 2. 権限状態をデバッグ出力
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            print("🔍 Checking permission status after 2 seconds...")
+            multipeerManager.recheckPermission()
+        }
     }
 }
