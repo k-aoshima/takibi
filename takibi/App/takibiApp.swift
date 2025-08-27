@@ -9,18 +9,12 @@ import SwiftUI
 
 @main
 struct takibiApp: App {
+    @StateObject private var multipeerManager = MultipeerManager()
+    
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .onAppear {
-                    // MultipeerConnectivityの設定をここで行う
-                    configureMultipeerConnectivity()
-                }
+                .environmentObject(multipeerManager)
         }
-    }
-    
-    private func configureMultipeerConnectivity() {
-        // この関数は将来的にMultipeerConnectivityの設定が必要な場合に使用
-        print("Multipeer Connectivity configured")
     }
 }

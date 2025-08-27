@@ -7,6 +7,7 @@
 
 import MultipeerConnectivity
 import Foundation
+import UIKit
 
 class MultipeerManager: NSObject, ObservableObject {
     private let serviceType = "takibi-chat"
@@ -16,6 +17,8 @@ class MultipeerManager: NSObject, ObservableObject {
     @Published var availablePeers: [MCPeerID] = []
     @Published var receivedMessages: [ChatMessage] = []
     @Published var connectedPeers: [MCPeerID] = []
+    @Published var connectionError: String?
+    @Published var showingError = false
     
     private var session: MCSession
     private var nearbyServiceAdvertiser: MCNearbyServiceAdvertiser
@@ -31,6 +34,18 @@ class MultipeerManager: NSObject, ObservableObject {
         session.delegate = self
         nearbyServiceAdvertiser.delegate = self
         nearbyServiceBrowser.delegate = self
+    }
+    
+    private func showConnectionError(_ message: String) {
+        DispatchQueue.main.async {
+            self.connectionError = message
+            self.showingError = true
+        }
+    }
+    
+    func clearError() {
+        connectionError = nil
+        showingError = false
     }
     
     func startHosting() {
@@ -56,18 +71,18 @@ class MultipeerManager: NSObject, ObservableObject {
     func sendMessage(_ message: String) {
         guard !session.connectedPeers.isEmpty else { return }
         
-        let chatMessage = ChatMessage(content: message, senderID: myPeerID.displayName, timestamp: Date())
+        let chatMessage = ChatMessage(content: message, senderID: myPeerID.displayName, timestamp: Date(), isFromMe: true)
         
         do {
             let data = try JSONEncoder().encode(chatMessage)
             try session.send(data, toPeers: session.connectedPeers, with: .reliable)
             
-            // Add to local messages
             DispatchQueue.main.async {
                 self.receivedMessages.append(chatMessage)
             }
         } catch {
             print("Error sending message: \(error)")
+            showConnectionError("メッセージの送信に失敗しました")
         }
     }
     
@@ -75,6 +90,12 @@ class MultipeerManager: NSObject, ObservableObject {
         session.disconnect()
         stopHosting()
         stopBrowsing()
+        
+        DispatchQueue.main.async {
+            self.isConnected = false
+            self.availablePeers.removeAll()
+            self.connectedPeers.removeAll()
+        }
     }
 }
 
@@ -86,6 +107,7 @@ extension MultipeerManager: MCSessionDelegate {
             case .connected:
                 self.isConnected = true
                 self.connectedPeers = session.connectedPeers
+                self.clearError()
                 print("Connected to \(peerID.displayName)")
             case .connecting:
                 print("Connecting to \(peerID.displayName)")
@@ -101,7 +123,8 @@ extension MultipeerManager: MCSessionDelegate {
     
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         do {
-            let chatMessage = try JSONDecoder().decode(ChatMessage.self, from: data)
+            var chatMessage = try JSONDecoder().decode(ChatMessage.self, from: data)
+            chatMessage.isFromMe = false
             DispatchQueue.main.async {
                 self.receivedMessages.append(chatMessage)
             }
@@ -130,8 +153,17 @@ extension MultipeerManager: MCSessionDelegate {
 // MARK: - MCNearbyServiceAdvertiserDelegate
 extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        // Auto-accept invitations for simplicity
         invitationHandler(true, session)
+    }
+    
+    func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
+        print("Advertiser failed to start: \(error.localizedDescription)")
+        
+        if let nsError = error as NSError?, nsError.code == -72008 {
+            showConnectionError("ローカルネットワークへのアクセス許可が必要です。\n設定 > プライバシーとセキュリティ > ローカルネットワーク で takibi を有効にしてください。")
+        } else {
+            showConnectionError("デバイスの公開を開始できませんでした")
+        }
     }
 }
 
@@ -148,6 +180,16 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         DispatchQueue.main.async {
             self.availablePeers.removeAll { $0 == peerID }
+        }
+    }
+    
+    func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
+        print("Browser failed to start: \(error.localizedDescription)")
+        
+        if let nsError = error as NSError?, nsError.code == -72008 {
+            showConnectionError("ローカルネットワークへのアクセス許可が必要です。\n設定 > プライバシーとセキュリティ > ローカルネットワーク で takibi を有効にしてください。")
+        } else {
+            showConnectionError("ネットワーク検索を開始できませんでした")
         }
     }
 }
