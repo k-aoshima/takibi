@@ -5,96 +5,161 @@
 //  Created by 青嶋広輔 on 8/27/25.
 //
 
-import MultipeerConnectivity
 import Foundation
-import UIKit
+import MultipeerConnectivity
+import SwiftUI
 
 class MultipeerManager: NSObject, ObservableObject {
     private let serviceType = "takibi-chat"
     private let myPeerID = MCPeerID(displayName: UIDevice.current.name)
     
+    private var session: MCSession!
+    private var advertiser: MCNearbyServiceAdvertiser?
+    private var browser: MCNearbyServiceBrowser?
+    
     @Published var isConnected = false
     @Published var availablePeers: [MCPeerID] = []
-    @Published var receivedMessages: [ChatMessage] = []
     @Published var connectedPeers: [MCPeerID] = []
-    @Published var connectionError: String?
-    @Published var showingError = false
-    
-    private var session: MCSession
-    private var nearbyServiceAdvertiser: MCNearbyServiceAdvertiser
-    private var nearbyServiceBrowser: MCNearbyServiceBrowser
+    @Published var receivedMessages: [ChatMessage] = []
+    @Published var shouldAutoConnect = false // QRコードスキャン後の自動接続フラグ
     
     override init() {
-        session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .required)
-        nearbyServiceAdvertiser = MCNearbyServiceAdvertiser(peer: myPeerID, discoveryInfo: nil, serviceType: serviceType)
-        nearbyServiceBrowser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
-        
         super.init()
-        
+        session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .required)
         session.delegate = self
-        nearbyServiceAdvertiser.delegate = self
-        nearbyServiceBrowser.delegate = self
     }
     
-    private func showConnectionError(_ message: String) {
-        DispatchQueue.main.async {
-            self.connectionError = message
-            self.showingError = true
-        }
+    deinit {
+        stopHosting()
+        stopBrowsing()
     }
     
-    func clearError() {
-        connectionError = nil
-        showingError = false
-    }
-    
+    // MARK: - Hosting
     func startHosting() {
-        nearbyServiceAdvertiser.startAdvertisingPeer()
+        advertiser = MCNearbyServiceAdvertiser(peer: myPeerID, discoveryInfo: nil, serviceType: serviceType)
+        advertiser?.delegate = self
+        advertiser?.startAdvertisingPeer()
     }
     
     func stopHosting() {
-        nearbyServiceAdvertiser.stopAdvertisingPeer()
+        advertiser?.stopAdvertisingPeer()
+        advertiser = nil
     }
     
+    // MARK: - Browsing
     func startBrowsing() {
-        nearbyServiceBrowser.startBrowsingForPeers()
+        browser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
+        browser?.delegate = self
+        browser?.startBrowsingForPeers()
     }
     
     func stopBrowsing() {
-        nearbyServiceBrowser.stopBrowsingForPeers()
+        browser?.stopBrowsingForPeers()
+        browser = nil
     }
     
+    // MARK: - Connection
     func invite(peer: MCPeerID) {
-        nearbyServiceBrowser.invitePeer(peer, to: session, withContext: nil, timeout: 30)
-    }
-    
-    func sendMessage(_ message: String) {
-        guard !session.connectedPeers.isEmpty else { return }
-        
-        let chatMessage = ChatMessage(content: message, senderID: myPeerID.displayName, timestamp: Date(), isFromMe: true)
-        
-        do {
-            let data = try JSONEncoder().encode(chatMessage)
-            try session.send(data, toPeers: session.connectedPeers, with: .reliable)
-            
-            DispatchQueue.main.async {
-                self.receivedMessages.append(chatMessage)
-            }
-        } catch {
-            print("Error sending message: \(error)")
-            showConnectionError("メッセージの送信に失敗しました")
-        }
+        browser?.invitePeer(peer, to: session, withContext: nil, timeout: 10)
     }
     
     func disconnect() {
         session.disconnect()
-        stopHosting()
-        stopBrowsing()
+        isConnected = false
+        connectedPeers.removeAll()
+        availablePeers.removeAll()
+    }
+    
+    // MARK: - QR Code
+    func getConnectionQRCode() -> String {
+        // デバイス名とサービスタイプを含むQRコードデータを生成
+        let qrData = "takibi://connect/\(myPeerID.displayName)/\(serviceType)"
+        return qrData
+    }
+    
+    func handleScannedQRCode(_ qrCode: String) {
+        guard qrCode.hasPrefix("takibi://connect/") else {
+            print("❌ Invalid QR code format: \(qrCode)")
+            return
+        }
         
-        DispatchQueue.main.async {
-            self.isConnected = false
-            self.availablePeers.removeAll()
-            self.connectedPeers.removeAll()
+        let components = qrCode.replacingOccurrences(of: "takibi://connect/", with: "").components(separatedBy: "/")
+        guard components.count >= 2 else {
+            print("❌ Invalid QR code components")
+            return
+        }
+        
+        let peerName = components[0]
+        let serviceType = components[1]
+        
+        print("📱 QR Code scanned - Peer: \(peerName), Service: \(serviceType)")
+        
+        // QRコードスキャン後は自動接続フラグを設定
+        if serviceType == self.serviceType {
+            print("🔍 Starting auto-connection process...")
+            shouldAutoConnect = true
+            
+            // 既存のセッションをリセットして新しい接続に備える
+            stopBrowsing()
+            stopHosting()
+            
+            // availablePeersをクリア
+            availablePeers.removeAll()
+            
+            print("⏸️ Stopped existing sessions, waiting before restart...")
+            
+            // 少し待ってから再開始（競合を避けるため）
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                print("🚀 Starting browsing for peer: \(peerName)")
+                self.startBrowsing()
+                
+                // ホスティングも開始（相互発見のため）
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                    print("📡 Starting hosting for mutual discovery")
+                    self.startHosting()
+                }
+                
+                // タイムアウト処理（10秒後に再試行）
+                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
+                    if self.shouldAutoConnect && !self.isConnected {
+                        print("⏰ Auto-connection timeout, retrying...")
+                        self.shouldAutoConnect = true
+                        self.stopBrowsing()
+                        self.stopHosting()
+                        
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                            self.startBrowsing()
+                            self.startHosting()
+                        }
+                    }
+                }
+            }
+        } else {
+            print("❌ Service type mismatch: expected \(self.serviceType), got \(serviceType)")
+        }
+    }
+    
+    // MARK: - Messaging
+    func sendMessage(_ text: String) {
+        guard !connectedPeers.isEmpty else { return }
+        
+        let message = ChatMessage(content: text, senderID: myPeerID.displayName, isFromMe: true)
+        receivedMessages.append(message)
+        
+        do {
+            let data = try JSONEncoder().encode(message)
+            try session.send(data, toPeers: connectedPeers, with: .reliable)
+        } catch {
+            print("Error sending message: \(error)")
+        }
+    }
+    
+    // MARK: - Settings
+    func openAppSettings() {
+        if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
+            DispatchQueue.main.async {
+                UIApplication.shared.open(settingsUrl)
+            }
         }
     }
 }
@@ -105,16 +170,22 @@ extension MultipeerManager: MCSessionDelegate {
         DispatchQueue.main.async {
             switch state {
             case .connected:
+                if !self.connectedPeers.contains(peerID) {
+                    self.connectedPeers.append(peerID)
+                }
                 self.isConnected = true
-                self.connectedPeers = session.connectedPeers
-                self.clearError()
-                print("Connected to \(peerID.displayName)")
+                if let index = self.availablePeers.firstIndex(of: peerID) {
+                    self.availablePeers.remove(at: index)
+                }
+                print("✅ Connected to: \(peerID.displayName)")
             case .connecting:
-                print("Connecting to \(peerID.displayName)")
+                print("🔄 Connecting to: \(peerID.displayName)")
             case .notConnected:
-                self.isConnected = session.connectedPeers.count > 0
-                self.connectedPeers = session.connectedPeers
-                print("Disconnected from \(peerID.displayName)")
+                if let index = self.connectedPeers.firstIndex(of: peerID) {
+                    self.connectedPeers.remove(at: index)
+                }
+                self.isConnected = !self.connectedPeers.isEmpty
+                print("❌ Disconnected from: \(peerID.displayName)")
             @unknown default:
                 break
             }
@@ -123,31 +194,20 @@ extension MultipeerManager: MCSessionDelegate {
     
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         do {
-            var chatMessage = try JSONDecoder().decode(ChatMessage.self, from: data)
-            chatMessage.isFromMe = false
+            var message = try JSONDecoder().decode(ChatMessage.self, from: data)
             DispatchQueue.main.async {
-                self.receivedMessages.append(chatMessage)
+                self.receivedMessages.append(message)
             }
         } catch {
             print("Error decoding message: \(error)")
         }
     }
     
-    func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {
-        // Not used in this implementation
-    }
+    func session(_ session: MCSession, didReceive stream: InputStream, withName streamName: String, fromPeer peerID: MCPeerID) {}
     
-    func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {
-        // Not used in this implementation
-    }
+    func session(_ session: MCSession, didStartReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, with progress: Progress) {}
     
-    func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {
-        // Not used in this implementation
-    }
-    
-    func session(_ session: MCSession, didReceiveCertificate certificate: [Any]?, fromPeer peerID: MCPeerID, certificateHandler: @escaping (Bool) -> Void) {
-        certificateHandler(true)
-    }
+    func session(_ session: MCSession, didFinishReceivingResourceWithName resourceName: String, fromPeer peerID: MCPeerID, at localURL: URL?, withError error: Error?) {}
 }
 
 // MARK: - MCNearbyServiceAdvertiserDelegate
@@ -155,41 +215,39 @@ extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
         invitationHandler(true, session)
     }
-    
-    func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
-        print("Advertiser failed to start: \(error.localizedDescription)")
-        
-        if let nsError = error as NSError?, nsError.code == -72008 {
-            showConnectionError("ローカルネットワークへのアクセス許可が必要です。\n設定 > プライバシーとセキュリティ > ローカルネットワーク で takibi を有効にしてください。")
-        } else {
-            showConnectionError("デバイスの公開を開始できませんでした")
-        }
-    }
 }
 
 // MARK: - MCNearbyServiceBrowserDelegate
 extension MultipeerManager: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
         DispatchQueue.main.async {
-            if !self.availablePeers.contains(peerID) {
+            print("🔍 Found peer: \(peerID.displayName)")
+            if !self.availablePeers.contains(peerID) && !self.connectedPeers.contains(peerID) {
                 self.availablePeers.append(peerID)
+                print("➕ Added peer to available list: \(peerID.displayName)")
+                
+                // QRコードスキャン後の自動接続
+                if self.shouldAutoConnect {
+                    print("🚀 Auto-connecting to: \(peerID.displayName)")
+                    self.invite(peer: peerID)
+                    self.shouldAutoConnect = false // フラグをリセット
+                    print("🔄 shouldAutoConnect flag reset")
+                } else {
+                    print("⏳ Manual connection required for: \(peerID.displayName)")
+                }
+            } else {
+                print("⚠️ Peer already in list or connected: \(peerID.displayName)")
             }
         }
     }
     
     func browser(_ browser: MCNearbyServiceBrowser, lostPeer peerID: MCPeerID) {
         DispatchQueue.main.async {
-            self.availablePeers.removeAll { $0 == peerID }
-        }
-    }
-    
-    func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
-        print("Browser failed to start: \(error.localizedDescription)")
-        
-        if let nsError = error as NSError?, nsError.code == -72008 {
-            showConnectionError("ローカルネットワークへのアクセス許可が必要です。\n設定 > プライバシーとセキュリティ > ローカルネットワーク で takibi を有効にしてください。")
-        } else {
-            showConnectionError("ネットワーク検索を開始できませんでした")
+            print("📉 Lost peer: \(peerID.displayName)")
+            if let index = self.availablePeers.firstIndex(of: peerID) {
+                self.availablePeers.remove(at: index)
+                print("➖ Removed peer from available list: \(peerID.displayName)")
+            }
         }
     }
 }

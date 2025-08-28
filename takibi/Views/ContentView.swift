@@ -27,6 +27,9 @@ struct ConnectionView: View {
     @ObservedObject var multipeerManager: MultipeerManager
     @State private var isHosting = false
     @State private var isBrowsing = false
+    @State private var showingQRCode = false
+    @State private var showingQRScanner = false
+    @State private var scannedCode = ""
     
     var body: some View {
         VStack(spacing: 30) {
@@ -82,6 +85,37 @@ struct ConnectionView: View {
                     .background(isBrowsing ? Color.red : Color.green)
                     .cornerRadius(10)
                 }
+                
+                // QRコード機能ボタンを追加
+                HStack(spacing: 15) {
+                    Button(action: {
+                        showingQRCode = true
+                    }) {
+                        HStack {
+                            Image(systemName: "qrcode")
+                            Text("Show QR")
+                        }
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.orange)
+                        .cornerRadius(10)
+                    }
+                    
+                    Button(action: {
+                        showingQRScanner = true
+                    }) {
+                        HStack {
+                            Image(systemName: "camera")
+                            Text("Scan QR")
+                        }
+                        .foregroundColor(.white)
+                        .padding()
+                        .frame(maxWidth: .infinity)
+                        .background(Color.purple)
+                        .cornerRadius(10)
+                    }
+                }
             }
             
             if !multipeerManager.availablePeers.isEmpty {
@@ -113,6 +147,40 @@ struct ConnectionView: View {
         }
         .padding()
         .navigationTitle("Connect")
+        .sheet(isPresented: $showingQRCode) {
+            QRCodeDisplayView()
+                .environmentObject(multipeerManager)
+        }
+        .sheet(isPresented: $showingQRScanner) {
+            QRCodeScannerView(scannedCode: $scannedCode)
+        }
+        .onChange(of: scannedCode) { newValue in
+            if !newValue.isEmpty {
+                print("📲 QR Code scanned: \(newValue)")
+                
+                // QRコードスキャン後の処理を改善
+                multipeerManager.handleScannedQRCode(newValue)
+                
+                // UI状態をリセット
+                scannedCode = ""
+                showingQRScanner = false
+                
+                // ホスティング状態を同期（MultipeerManagerで自動的に開始されるため）
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    isHosting = true
+                    isBrowsing = true
+                }
+            }
+        }
+        .onChange(of: multipeerManager.isConnected) { isConnected in
+            // 接続が確立されたら自動的にモーダルを閉じる
+            print("🔄 isConnected changed to: \(isConnected)")
+            if isConnected {
+                print("🎉 Connection established! Closing modals and transitioning to chat...")
+                showingQRCode = false
+                showingQRScanner = false
+            }
+        }
     }
 }
 
