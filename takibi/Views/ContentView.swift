@@ -252,31 +252,47 @@ struct MessageBubble: View {
     var body: some View {
         HStack {
             if message.isFromMe {
-                Spacer()
-            }
-            
-            VStack(alignment: message.isFromMe ? .trailing : .leading, spacing: 4) {
-                if !message.isFromMe {
+                // 自分のメッセージ：右寄せ
+                Spacer(minLength: 60)
+                
+                VStack(alignment: .trailing, spacing: 4) {
+                    Text(message.content)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color.blue)
+                        .foregroundColor(.white)
+                        .cornerRadius(18)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    
+                    Text(formatTime(message.timestamp))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
+                }
+            } else {
+                // 相手のメッセージ：左寄せ
+                VStack(alignment: .leading, spacing: 4) {
                     Text(message.senderID)
                         .font(.caption)
                         .foregroundColor(.secondary)
+                        .padding(.leading, 4)
+                    
+                    Text(message.content)
+                        .padding(.horizontal, 16)
+                        .padding(.vertical, 10)
+                        .background(Color(.systemGray5))
+                        .foregroundColor(.primary)
+                        .cornerRadius(18)
+                        .clipShape(RoundedRectangle(cornerRadius: 18))
+                    
+                    Text(formatTime(message.timestamp))
+                        .font(.caption2)
+                        .foregroundColor(.secondary)
                 }
                 
-                Text(message.content)
-                    .padding(12)
-                    .background(message.isFromMe ? Color.blue : Color.gray.opacity(0.3))
-                    .foregroundColor(message.isFromMe ? .white : .primary)
-                    .cornerRadius(16)
-                
-                Text(formatTime(message.timestamp))
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-            }
-            
-            if !message.isFromMe {
-                Spacer()
+                Spacer(minLength: 60)
             }
         }
+        .padding(.horizontal, 8)
     }
     
     private func formatTime(_ date: Date) -> String {

@@ -195,8 +195,10 @@ extension MultipeerManager: MCSessionDelegate {
     func session(_ session: MCSession, didReceive data: Data, fromPeer peerID: MCPeerID) {
         do {
             var message = try JSONDecoder().decode(ChatMessage.self, from: data)
+            // 受信したメッセージは必ず相手からのものなので isFromMe = false に設定
+            let receivedMessage = ChatMessage(content: message.content, senderID: message.senderID, isFromMe: false)
             DispatchQueue.main.async {
-                self.receivedMessages.append(message)
+                self.receivedMessages.append(receivedMessage)
             }
         } catch {
             print("Error decoding message: \(error)")
