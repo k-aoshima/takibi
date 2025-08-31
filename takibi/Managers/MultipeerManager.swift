@@ -18,6 +18,9 @@ class MultipeerManager: NSObject, ObservableObject {
     private var advertiser: MCNearbyServiceAdvertiser?
     private var browser: MCNearbyServiceBrowser?
     
+    // クリーンアップ用のTimer
+    private var cleanupTimer: Timer?
+    
     @Published var isConnected = false
     @Published var availablePeers: [MCPeerID] = []
     @Published var connectedPeers: [MCPeerID] = []
@@ -43,14 +46,26 @@ class MultipeerManager: NSObject, ObservableObject {
         session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .optional)
         session.delegate = self
         
+        // 定期的なクリーンアップを開始
+        startPeriodicCleanup()
+        
         print("📱 Peer created: \(myPeerID.displayName)")
         print("🔧 Service type: \(serviceType)")
         print("🌐 Environment: \(self.isSimulator ? "Simulator" : "Device")")
     }
     
     deinit {
+        // クリーンアップタイマーを停止
+        cleanupTimer?.invalidate()
+        cleanupTimer = nil
+        
         stopHosting()
         stopBrowsing()
+        
+        // セッションを安全に切断
+        session?.disconnect()
+        
+        print("🧹 MultipeerManager deinitialized - all resources cleaned up")
     }
     
     // MARK: - Hosting
@@ -294,13 +309,21 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
                 return
             }
             
+            // 長時間経過した古いピアをクリーンアップ
+            self.cleanupOldPeers()
+            
+            // 非常に古いピア（1時間以上）は除外
+            if self.isVeryOldPeer(peerID: peerID) {
+                print("⚠️ Skipping very old peer (>1 hour): \(peerID.displayName)")
+                return
+            }
+            
             // クロスプラットフォーム接続の確認
             let myEnvironment = self.isSimulator ? "Simulator" : "Device"
             let peerEnvironment = self.getPeerEnvironment(peerID.displayName)
             
             print("   - Cross-platform check: My=\(myEnvironment), Peer=\(peerEnvironment)")
             
-            // タイムスタンプベースのフィルタリングを削除し、シンプルな重複チェックのみ
             // 同じベース名のピアが既に存在する場合、より新しいものを保持
             self.removeOldDuplicatePeers(for: peerID)
             
@@ -417,5 +440,62 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
         }
         
         print("✨ Session refreshed")
+    }
+    
+    // 非常に古いピア（1時間以上）を判定
+    private func isVeryOldPeer(peerID: MCPeerID) -> Bool {
+        let components = peerID.displayName.components(separatedBy: "-")
+        
+        guard let timestampString = components.last,
+              let peerTimestamp = Int(timestampString) else {
+            // タイムスタンプがない場合は古いピアとして扱う
+            print("   - No timestamp found, treating as very old peer")
+            return true
+        }
+        
+        let currentTimestamp = Int(Date().timeIntervalSince1970)
+        let ageDifference = currentTimestamp - peerTimestamp
+        let oneHourInSeconds = 3600
+        
+        let isVeryOld = ageDifference > oneHourInSeconds
+        
+        if isVeryOld {
+            print("   - Peer age: \(ageDifference) seconds (>1 hour)")
+        }
+        
+        return isVeryOld
+    }
+    
+    // 古いピアのクリーンアップ
+    private func cleanupOldPeers() {
+        let currentTimestamp = Int(Date().timeIntervalSince1970)
+        let thirtyMinutesInSeconds = 1800
+        
+        let initialCount = availablePeers.count
+        
+        availablePeers.removeAll { peer in
+            let peerTimestamp = getTimestamp(from: peer.displayName)
+            let ageDifference = currentTimestamp - peerTimestamp
+            
+            let shouldRemove = ageDifference > thirtyMinutesInSeconds
+            
+            if shouldRemove {
+                print("🧹 Cleaning up old peer: \(peer.displayName) (age: \(ageDifference)s)")
+            }
+            
+            return shouldRemove
+        }
+        
+        let removedCount = initialCount - availablePeers.count
+        if removedCount > 0 {
+            print("🧹 Cleaned up \(removedCount) old peers")
+        }
+    }
+    
+    // 定期的なクリーンアップを開始
+    private func startPeriodicCleanup() {
+        cleanupTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
+            self?.cleanupOldPeers()
+        }
     }
 }
