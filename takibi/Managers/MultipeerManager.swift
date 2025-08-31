@@ -28,10 +28,15 @@ class MultipeerManager: NSObject, ObservableObject {
         // サービスタイプは固定
         self.serviceType = "takibi-chat"
         
-        // PeerIDにタイムスタンプを追加してユニーク化
+        // PeerIDを環境に応じて作成（シミュレータと実機を区別）
         let timestamp = Int(Date().timeIntervalSince1970)
         let deviceName = UIDevice.current.name
-        self.myPeerID = MCPeerID(displayName: "\(deviceName)-\(timestamp)")
+        
+        #if targetEnvironment(simulator)
+        self.myPeerID = MCPeerID(displayName: "Simulator-\(deviceName)-\(timestamp)")
+        #else
+        self.myPeerID = MCPeerID(displayName: "Device-\(deviceName)-\(timestamp)")
+        #endif
         
         super.init()
         
@@ -40,6 +45,7 @@ class MultipeerManager: NSObject, ObservableObject {
         
         print("📱 Peer created: \(myPeerID.displayName)")
         print("🔧 Service type: \(serviceType)")
+        print("🌐 Environment: \(self.isSimulator ? "Simulator" : "Device")")
     }
     
     deinit {
@@ -79,10 +85,37 @@ class MultipeerManager: NSObject, ObservableObject {
     }
     
     func disconnect() {
+        print("🔌 Starting disconnect process...")
+        
+        // セッションを安全に切断
         session.disconnect()
+        
+        // 状態を完全にリセット
         isConnected = false
         connectedPeers.removeAll()
         availablePeers.removeAll()
+        shouldAutoConnect = false
+        
+        // ホスティングとブラウジングを停止
+        stopHosting()
+        stopBrowsing()
+        
+        print("🧹 Disconnect completed - all states reset")
+    }
+    
+    // 接続失敗時の完全リセット機能を追加
+    func resetConnection() {
+        print("🔄 Resetting connection completely...")
+        
+        // 既存の接続を完全に切断
+        disconnect()
+        
+        // セッションを新しく作成
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.session = MCSession(peer: self.myPeerID, securityIdentity: nil, encryptionPreference: .optional)
+            self.session.delegate = self
+            print("✨ New session created")
+        }
     }
     
     // MARK: - QR Code
@@ -182,11 +215,23 @@ extension MultipeerManager: MCSessionDelegate {
             case .connecting:
                 print("🔄 Connecting to: \(peerID.displayName)")
             case .notConnected:
+                print("❌ Disconnected from: \(peerID.displayName)")
+                
+                // 接続していたピアを削除
                 if let index = self.connectedPeers.firstIndex(of: peerID) {
                     self.connectedPeers.remove(at: index)
                 }
+                
+                // 接続状態を更新
                 self.isConnected = !self.connectedPeers.isEmpty
-                print("❌ Disconnected from: \(peerID.displayName)")
+                
+                // 予期しない切断の場合、セッションをリフレッシュ
+                if !self.connectedPeers.isEmpty || self.isConnected {
+                    print("🔄 Unexpected disconnection, refreshing session...")
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+                        self.refreshSession()
+                    }
+                }
             @unknown default:
                 break
             }
@@ -239,6 +284,9 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
         DispatchQueue.main.async {
             print("🔍 Found peer: \(peerID.displayName)")
+            print("   - My peer: \(self.myPeerID.displayName)")
+            print("   - My environment: \(self.isSimulator ? "Simulator" : "Device")")
+            print("   - Found peer environment: \(self.getPeerEnvironment(peerID.displayName))")
             
             // 自分自身は除外
             if peerID.displayName == self.myPeerID.displayName {
@@ -246,12 +294,13 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
                 return
             }
             
-            // タイムスタンプベースの古いピア除外
-            if self.isOldPeer(peerID: peerID) {
-                print("⚠️ Skipping old peer: \(peerID.displayName)")
-                return
-            }
+            // クロスプラットフォーム接続の確認
+            let myEnvironment = self.isSimulator ? "Simulator" : "Device"
+            let peerEnvironment = self.getPeerEnvironment(peerID.displayName)
             
+            print("   - Cross-platform check: My=\(myEnvironment), Peer=\(peerEnvironment)")
+            
+            // タイムスタンプベースのフィルタリングを削除し、シンプルな重複チェックのみ
             // 同じベース名のピアが既に存在する場合、より新しいものを保持
             self.removeOldDuplicatePeers(for: peerID)
             
@@ -266,6 +315,8 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
                     self.invite(peer: peerID)
                     self.shouldAutoConnect = false
                 }
+            } else {
+                print("⚠️ Skipping duplicate peer: \(peerID.displayName)")
             }
         }
     }
@@ -283,23 +334,6 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
         DispatchQueue.main.async {
             print("❌ Browser failed to start: \(error.localizedDescription)")
         }
-    }
-    
-    // 古いピアかどうかを判定するヘルパーメソッド
-    private func isOldPeer(peerID: MCPeerID) -> Bool {
-        let components = peerID.displayName.components(separatedBy: "-")
-        
-        // タイムスタンプが含まれていない場合は古いピアとして扱う
-        guard let timestampString = components.last,
-              let peerTimestamp = Int(timestampString) else {
-            return true
-        }
-        
-        let currentTimestamp = Int(Date().timeIntervalSince1970)
-        let ageDifference = currentTimestamp - peerTimestamp
-        
-        // 60秒以上古いピアは除外
-        return ageDifference > 60
     }
     
     // 同じベース名の古いピアを削除するヘルパーメソッド
@@ -334,5 +368,54 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
             return 0
         }
         return timestamp
+    }
+    
+    // ピアの環境を判定するヘルパーメソッド
+    private func getPeerEnvironment(_ displayName: String) -> String {
+        if displayName.hasPrefix("Simulator-") {
+            return "Simulator"
+        } else if displayName.hasPrefix("Device-") {
+            return "Device"
+        } else {
+            return "Unknown"
+        }
+    }
+    
+    // 環境判定のヘルパープロパティ
+    private var isSimulator: Bool {
+        #if targetEnvironment(simulator)
+        return true
+        #else
+        return false
+        #endif
+    }
+    
+    // セッションをリフレッシュする機能を追加
+    private func refreshSession() {
+        print("🔄 Refreshing session...")
+        
+        // 現在のセッションを切断
+        session.disconnect()
+        
+        // 新しいセッションを作成
+        session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .optional)
+        session.delegate = self
+        
+        // ホスティングとブラウジングを再開
+        if advertiser != nil {
+            stopHosting()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.startHosting()
+            }
+        }
+        
+        if browser != nil {
+            stopBrowsing()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self.startBrowsing()
+            }
+        }
+        
+        print("✨ Session refreshed")
     }
 }
