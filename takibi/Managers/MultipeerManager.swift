@@ -10,8 +10,9 @@ import MultipeerConnectivity
 import SwiftUI
 
 class MultipeerManager: NSObject, ObservableObject {
-    private let serviceType = "takibi-chat"
-    private let myPeerID = MCPeerID(displayName: UIDevice.current.name)
+    // アプリ固有のユニークなサービスタイプを生成
+    private let serviceType: String
+    private let myPeerID: MCPeerID
     
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
@@ -21,12 +22,24 @@ class MultipeerManager: NSObject, ObservableObject {
     @Published var availablePeers: [MCPeerID] = []
     @Published var connectedPeers: [MCPeerID] = []
     @Published var receivedMessages: [ChatMessage] = []
-    @Published var shouldAutoConnect = false // QRコードスキャン後の自動接続フラグ
+    @Published var shouldAutoConnect = false
     
     override init() {
+        // サービスタイプは固定
+        self.serviceType = "takibi-chat"
+        
+        // PeerIDにタイムスタンプを追加してユニーク化
+        let timestamp = Int(Date().timeIntervalSince1970)
+        let deviceName = UIDevice.current.name
+        self.myPeerID = MCPeerID(displayName: "\(deviceName)-\(timestamp)")
+        
         super.init()
-        session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .required)
+        
+        session = MCSession(peer: myPeerID, securityIdentity: nil, encryptionPreference: .optional)
         session.delegate = self
+        
+        print("📱 Peer created: \(myPeerID.displayName)")
+        print("🔧 Service type: \(serviceType)")
     }
     
     deinit {
@@ -48,9 +61,11 @@ class MultipeerManager: NSObject, ObservableObject {
     
     // MARK: - Browsing
     func startBrowsing() {
+        availablePeers.removeAll()
         browser = MCNearbyServiceBrowser(peer: myPeerID, serviceType: serviceType)
         browser?.delegate = self
         browser?.startBrowsingForPeers()
+        print("🔍 Started browsing for peers")
     }
     
     func stopBrowsing() {
@@ -118,21 +133,6 @@ class MultipeerManager: NSObject, ObservableObject {
                     print("📡 Starting hosting for mutual discovery")
                     self.startHosting()
                 }
-                
-                // タイムアウト処理（10秒後に再試行）
-                DispatchQueue.main.asyncAfter(deadline: .now() + 10.0) {
-                    if self.shouldAutoConnect && !self.isConnected {
-                        print("⏰ Auto-connection timeout, retrying...")
-                        self.shouldAutoConnect = true
-                        self.stopBrowsing()
-                        self.stopHosting()
-                        
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                            self.startBrowsing()
-                            self.startHosting()
-                        }
-                    }
-                }
             }
         } else {
             print("❌ Service type mismatch: expected \(self.serviceType), got \(serviceType)")
@@ -149,6 +149,7 @@ class MultipeerManager: NSObject, ObservableObject {
         do {
             let data = try JSONEncoder().encode(message)
             try session.send(data, toPeers: connectedPeers, with: .reliable)
+            print("📤 Message sent: \(text)")
         } catch {
             print("Error sending message: \(error)")
         }
@@ -199,6 +200,7 @@ extension MultipeerManager: MCSessionDelegate {
             let receivedMessage = ChatMessage(content: message.content, senderID: message.senderID, isFromMe: false)
             DispatchQueue.main.async {
                 self.receivedMessages.append(receivedMessage)
+                print("📥 Message received: \(message.content)")
             }
         } catch {
             print("Error decoding message: \(error)")
@@ -215,7 +217,20 @@ extension MultipeerManager: MCSessionDelegate {
 // MARK: - MCNearbyServiceAdvertiserDelegate
 extension MultipeerManager: MCNearbyServiceAdvertiserDelegate {
     func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didReceiveInvitationFromPeer peerID: MCPeerID, withContext context: Data?, invitationHandler: @escaping (Bool, MCSession?) -> Void) {
-        invitationHandler(true, session)
+        print("📩 Invitation received from: \(peerID.displayName)")
+        
+        // 接続状態を更新
+        DispatchQueue.main.async {
+            // 招待を受諾
+            invitationHandler(true, self.session)
+            print("✅ Invitation accepted from: \(peerID.displayName)")
+        }
+    }
+    
+    func advertiser(_ advertiser: MCNearbyServiceAdvertiser, didNotStartAdvertisingPeer error: Error) {
+        DispatchQueue.main.async {
+            print("❌ Advertiser failed to start: \(error.localizedDescription)")
+        }
     }
 }
 
@@ -224,21 +239,33 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
     func browser(_ browser: MCNearbyServiceBrowser, foundPeer peerID: MCPeerID, withDiscoveryInfo info: [String : String]?) {
         DispatchQueue.main.async {
             print("🔍 Found peer: \(peerID.displayName)")
+            
+            // 自分自身は除外
+            if peerID.displayName == self.myPeerID.displayName {
+                print("⚠️ Skipping self peer: \(peerID.displayName)")
+                return
+            }
+            
+            // タイムスタンプベースの古いピア除外
+            if self.isOldPeer(peerID: peerID) {
+                print("⚠️ Skipping old peer: \(peerID.displayName)")
+                return
+            }
+            
+            // 同じベース名のピアが既に存在する場合、より新しいものを保持
+            self.removeOldDuplicatePeers(for: peerID)
+            
+            // シンプルな重複チェック
             if !self.availablePeers.contains(peerID) && !self.connectedPeers.contains(peerID) {
                 self.availablePeers.append(peerID)
-                print("➕ Added peer to available list: \(peerID.displayName)")
+                print("✅ Added peer to available list: \(peerID.displayName)")
                 
                 // QRコードスキャン後の自動接続
                 if self.shouldAutoConnect {
                     print("🚀 Auto-connecting to: \(peerID.displayName)")
                     self.invite(peer: peerID)
-                    self.shouldAutoConnect = false // フラグをリセット
-                    print("🔄 shouldAutoConnect flag reset")
-                } else {
-                    print("⏳ Manual connection required for: \(peerID.displayName)")
+                    self.shouldAutoConnect = false
                 }
-            } else {
-                print("⚠️ Peer already in list or connected: \(peerID.displayName)")
             }
         }
     }
@@ -248,8 +275,64 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
             print("📉 Lost peer: \(peerID.displayName)")
             if let index = self.availablePeers.firstIndex(of: peerID) {
                 self.availablePeers.remove(at: index)
-                print("➖ Removed peer from available list: \(peerID.displayName)")
             }
         }
+    }
+    
+    func browser(_ browser: MCNearbyServiceBrowser, didNotStartBrowsingForPeers error: Error) {
+        DispatchQueue.main.async {
+            print("❌ Browser failed to start: \(error.localizedDescription)")
+        }
+    }
+    
+    // 古いピアかどうかを判定するヘルパーメソッド
+    private func isOldPeer(peerID: MCPeerID) -> Bool {
+        let components = peerID.displayName.components(separatedBy: "-")
+        
+        // タイムスタンプが含まれていない場合は古いピアとして扱う
+        guard let timestampString = components.last,
+              let peerTimestamp = Int(timestampString) else {
+            return true
+        }
+        
+        let currentTimestamp = Int(Date().timeIntervalSince1970)
+        let ageDifference = currentTimestamp - peerTimestamp
+        
+        // 60秒以上古いピアは除外
+        return ageDifference > 60
+    }
+    
+    // 同じベース名の古いピアを削除するヘルパーメソッド
+    private func removeOldDuplicatePeers(for newPeer: MCPeerID) {
+        let newPeerBaseName = getBaseName(from: newPeer.displayName)
+        let newPeerTimestamp = getTimestamp(from: newPeer.displayName)
+        
+        availablePeers.removeAll { existingPeer in
+            let existingBaseName = getBaseName(from: existingPeer.displayName)
+            let existingTimestamp = getTimestamp(from: existingPeer.displayName)
+            
+            // 同じベース名で、既存のピアの方が古い場合は削除
+            if existingBaseName == newPeerBaseName && existingTimestamp < newPeerTimestamp {
+                print("🗑️ Removing older duplicate peer: \(existingPeer.displayName)")
+                return true
+            }
+            return false
+        }
+    }
+    
+    // デバイス名からベース名を取得
+    private func getBaseName(from displayName: String) -> String {
+        let components = displayName.components(separatedBy: "-")
+        return components.dropLast().joined(separator: "-")
+    }
+    
+    // デバイス名からタイムスタンプを取得
+    private func getTimestamp(from displayName: String) -> Int {
+        let components = displayName.components(separatedBy: "-")
+        guard let timestampString = components.last,
+              let timestamp = Int(timestampString) else {
+            return 0
+        }
+        return timestamp
     }
 }

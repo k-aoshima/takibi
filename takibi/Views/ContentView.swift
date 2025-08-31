@@ -8,7 +8,7 @@
 import SwiftUI
 
 struct ContentView: View {
-    @StateObject private var multipeerManager = MultipeerManager()
+    @EnvironmentObject var multipeerManager: MultipeerManager
     @State private var showingConnectionView = false
     
     var body: some View {
@@ -154,7 +154,7 @@ struct ConnectionView: View {
         .sheet(isPresented: $showingQRScanner) {
             QRCodeScannerView(scannedCode: $scannedCode)
         }
-        .onChange(of: scannedCode) { newValue in
+        .onChange(of: scannedCode) { oldValue, newValue in
             if !newValue.isEmpty {
                 print("📲 QR Code scanned: \(newValue)")
                 
@@ -172,7 +172,7 @@ struct ConnectionView: View {
                 }
             }
         }
-        .onChange(of: multipeerManager.isConnected) { isConnected in
+        .onChange(of: multipeerManager.isConnected) { oldValue, isConnected in
             // 接続が確立されたら自動的にモーダルを閉じる
             print("🔄 isConnected changed to: \(isConnected)")
             if isConnected {
