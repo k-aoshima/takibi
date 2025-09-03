@@ -49,6 +49,12 @@ class MultipeerManager: NSObject, ObservableObject {
         // 定期的なクリーンアップを開始
         startPeriodicCleanup()
         
+        // アプリライフサイクル監視を開始
+        setupAppLifecycleObservers()
+        
+        // アプリ起動時の初期セッションリフレッシュ
+        performInitialSessionRefresh()
+        
         print("📱 Peer created: \(myPeerID.displayName)")
         print("🔧 Service type: \(serviceType)")
         print("🌐 Environment: \(self.isSimulator ? "Simulator" : "Device")")
@@ -496,6 +502,35 @@ extension MultipeerManager: MCNearbyServiceBrowserDelegate {
     private func startPeriodicCleanup() {
         cleanupTimer = Timer.scheduledTimer(withTimeInterval: 300, repeats: true) { [weak self] _ in
             self?.cleanupOldPeers()
+        }
+    }
+    
+    // アプリライフサイクル監視のセットアップ
+    private func setupAppLifecycleObservers() {
+        NotificationCenter.default.addObserver(self, selector: #selector(appDidBecomeActive), name: UIApplication.didBecomeActiveNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appWillResignActive), name: UIApplication.willResignActiveNotification, object: nil)
+    }
+    
+    // アプリがアクティブになったときの処理
+    @objc private func appDidBecomeActive() {
+        print("🌟 App became active")
+        
+        // セッションをリフレッシュ
+        refreshSession()
+    }
+    
+    // アプリが非アクティブになる前の処理
+    @objc private func appWillResignActive() {
+        print("🌙 App will resign active")
+        
+        // 必要に応じてクリーンアップやセッションの一時停止を実施
+        // ここでは特に何もしないが、将来的な拡張ポイントとして残しておく
+    }
+    
+    // アプリ起動時の初期セッションリフレッシュ
+    private func performInitialSessionRefresh() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+            self.refreshSession()
         }
     }
 }
