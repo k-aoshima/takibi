@@ -6,6 +6,7 @@
 //
 
 import SwiftUI
+import PhotosUI
 
 struct ContentView: View {
     @EnvironmentObject var multipeerManager: MultipeerManager
@@ -207,6 +208,9 @@ struct ChatView: View {
     @ObservedObject var multipeerManager: MultipeerManager
     @State private var messageText = ""
     @State private var showingUserSettings = false
+    @State private var isShowingPhotoPicker = false
+    @State private var photoPickerItem: PhotosPickerItem?
+    @State private var selectedImageData: Data?
     @FocusState private var isTextFieldFocused: Bool
     
     var body: some View {
@@ -248,31 +252,66 @@ struct ChatView: View {
                 }
             }
             
-            // Message input with improved keyboard handling
-            HStack {
-                TextField("Type a message...", text: $messageText, axis: .vertical)
-                    .textFieldStyle(RoundedBorderTextFieldStyle())
-                    .focused($isTextFieldFocused)
-                    .onSubmit {
-                        sendMessage()
+            // Message input area with photo preview
+            VStack(spacing: 8) {
+                // 選択した画像のプレビュー
+                if let imageData = selectedImageData, let image = UIImage(data: imageData) {
+                    HStack {
+                        Image(uiImage: image)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(maxHeight: 100)
+                            .cornerRadius(8)
+                        
+                        Spacer()
+                        
+                        Button(action: {
+                            selectedImageData = nil
+                        }) {
+                            Image(systemName: "xmark.circle.fill")
+                                .foregroundColor(.gray)
+                                .font(.system(size: 20))
+                        }
                     }
-                    .submitLabel(.send)
-                    // キーボード入力の問題を回避するための設定
-                    .autocorrectionDisabled(false)
-                    .textInputAutocapitalization(.sentences)
-                    // 絵文字検索の問題を回避
-                    .keyboardType(.default)
-                
-                Button(action: sendMessage) {
-                    Image(systemName: "paperplane.fill")
-                        .foregroundColor(.white)
-                        .padding(8)
-                        .background(messageText.isEmpty ? Color.gray : Color.blue)
-                        .clipShape(Circle())
+                    .padding(.horizontal)
+                    .padding(.top, 8)
                 }
-                .disabled(messageText.isEmpty)
+                
+                // Message input with improved keyboard handling
+                HStack {
+                    // 写真選択ボタン
+                    Button(action: {
+                        isShowingPhotoPicker = true
+                    }) {
+                        Image(systemName: "photo.circle.fill")
+                            .foregroundColor(.blue)
+                            .font(.system(size: 24))
+                    }
+                    
+                    TextField("Type a message...", text: $messageText, axis: .vertical)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .focused($isTextFieldFocused)
+                        .onSubmit {
+                            sendMessage()
+                        }
+                        .submitLabel(.send)
+                        // キーボード入力の問題を回避するための設定
+                        .autocorrectionDisabled(false)
+                        .textInputAutocapitalization(.sentences)
+                        // 絵文字検索の問題を回避
+                        .keyboardType(.default)
+                    
+                    Button(action: sendMessage) {
+                        Image(systemName: "paperplane.fill")
+                            .foregroundColor(.white)
+                            .padding(8)
+                            .background(canSendMessage ? Color.blue : Color.gray)
+                            .clipShape(Circle())
+                    }
+                    .disabled(!canSendMessage)
+                }
+                .padding()
             }
-            .padding()
         }
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
@@ -303,12 +342,43 @@ struct ChatView: View {
         .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
             isTextFieldFocused = false
         }
+        // 写真選択機能
+        .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoPickerItem, matching: .images)
+        .onChange(of: photoPickerItem) { newItem in
+            Task {
+                if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                    selectedImageData = data
+                }
+            }
+        }
+    }
+    
+    // 送信可能かどうかを判定する計算プロパティ
+    private var canSendMessage: Bool {
+        return !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || selectedImageData != nil
     }
     
     private func sendMessage() {
-        guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
-        multipeerManager.sendMessage(messageText)
-        messageText = ""
+        let hasText = !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        
+        if let imageData = selectedImageData {
+            if hasText {
+                // 画像とテキストの組み合わせメッセージを送信
+                multipeerManager.sendImageWithTextMessage(imageData: imageData, text: messageText)
+            } else {
+                // 画像のみを送信
+                multipeerManager.sendImageMessage(imageData: imageData)
+            }
+            selectedImageData = nil
+        } else if hasText {
+            // テキストのみを送信
+            multipeerManager.sendMessage(messageText)
+        }
+        
+        if hasText {
+            messageText = ""
+        }
+        
         // メッセージ送信後もフォーカスを維持
         isTextFieldFocused = true
     }

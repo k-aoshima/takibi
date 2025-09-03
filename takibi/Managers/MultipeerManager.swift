@@ -15,7 +15,7 @@ class MultipeerManager: NSObject, ObservableObject {
     private var myPeerID: MCPeerID
     
     // ユーザープロフィール管理
-    private let profileManager: UserProfileManager
+    let userProfileManager: UserProfileManager
     
     private var session: MCSession!
     private var advertiser: MCNearbyServiceAdvertiser?
@@ -40,10 +40,10 @@ class MultipeerManager: NSObject, ObservableObject {
         self.serviceType = "takibi-chat"
         
         // プロフィールマネージャーの初期化
-        self.profileManager = UserProfileManager()
+        self.userProfileManager = UserProfileManager()
         
         // ユーザープロフィールに基づいてPeerIDを作成
-        self.myPeerID = MCPeerID(displayName: self.profileManager.getPeerDisplayName())
+        self.myPeerID = MCPeerID(displayName: self.userProfileManager.getPeerDisplayName())
         
         super.init()
         
@@ -199,12 +199,11 @@ class MultipeerManager: NSObject, ObservableObject {
             return
         }
         
-        let currentProfile = profileManager.currentProfile
+        let currentProfile = userProfileManager.currentProfile
         let message = ChatMessage(
-            content: text,
+            text: text,
             senderID: myPeerID.displayName,
             isFromMe: true,
-            senderDisplayName: currentProfile.displayName,
             senderProfile: currentProfile
         )
         receivedMessages.append(message)
@@ -220,7 +219,65 @@ class MultipeerManager: NSObject, ObservableObject {
             return
         }
         
-        // 即座に送信
+        sendMessageToPeers(message: message, peers: readyPeers)
+    }
+    
+    func sendImageMessage(imageData: Data) {
+        guard !connectedPeers.isEmpty else {
+            print("⚠️ Cannot send image: no connected peers")
+            return
+        }
+        
+        let currentProfile = userProfileManager.currentProfile
+        let message = ChatMessage(
+            imageData: imageData,
+            senderID: myPeerID.displayName,
+            isFromMe: true,
+            senderProfile: currentProfile
+        )
+        receivedMessages.append(message)
+        
+        // 準備が完了しているピアを特定
+        let readyPeers = connectedPeers.filter { 
+            connectionReadyStates[$0] == true && session.connectedPeers.contains($0)
+        }
+        
+        if readyPeers.isEmpty {
+            print("⚠️ No ready peers available, queuing image")
+            pendingMessages.append((message: message, peers: connectedPeers))
+            return
+        }
+        
+        sendMessageToPeers(message: message, peers: readyPeers)
+    }
+    
+    func sendImageWithTextMessage(imageData: Data, text: String) {
+        guard !connectedPeers.isEmpty else {
+            print("⚠️ Cannot send image with text: no connected peers")
+            return
+        }
+        
+        let currentProfile = userProfileManager.currentProfile
+        let message = ChatMessage(
+            imageData: imageData,
+            text: text,
+            senderID: myPeerID.displayName,
+            isFromMe: true,
+            senderProfile: currentProfile
+        )
+        receivedMessages.append(message)
+        
+        // 準備が完了しているピアを特定
+        let readyPeers = connectedPeers.filter { 
+            connectionReadyStates[$0] == true && session.connectedPeers.contains($0)
+        }
+        
+        if readyPeers.isEmpty {
+            print("⚠️ No ready peers available, queuing image with text")
+            pendingMessages.append((message: message, peers: connectedPeers))
+            return
+        }
+        
         sendMessageToPeers(message: message, peers: readyPeers)
     }
     
@@ -232,7 +289,16 @@ class MultipeerManager: NSObject, ObservableObject {
         }
         
         guard !validPeers.isEmpty else {
-            print("⚠️ No ready peers available, queuing message: \(message.content)")
+            let messageDescription: String
+            switch message.messageType {
+            case .text(let text):
+                messageDescription = text
+            case .image:
+                messageDescription = "📷 Image"
+            case .imageWithText(_, let text):
+                messageDescription = "📷 Image with text: \(text)"
+            }
+            print("⚠️ No ready peers available, queuing message: \(messageDescription)")
             pendingMessages.append((message: message, peers: peers))
             return
         }
@@ -242,7 +308,16 @@ class MultipeerManager: NSObject, ObservableObject {
             do {
                 let data = try JSONEncoder().encode(message)
                 try self.session.send(data, toPeers: validPeers, with: .reliable)
-                print("📤 Message sent to \(validPeers.count) peer(s): \(message.content)")
+                let messageDescription: String
+                switch message.messageType {
+                case .text(let text):
+                    messageDescription = text
+                case .image:
+                    messageDescription = "📷 Image"
+                case .imageWithText(_, let text):
+                    messageDescription = "📷 Image with text: \(text)"
+                }
+                print("📤 Message sent to \(validPeers.count) peer(s): \(messageDescription)")
                 
             } catch {
                 print("⚠️ Error sending message: \(error)")
@@ -257,7 +332,7 @@ class MultipeerManager: NSObject, ObservableObject {
         print("🔄 Updating profile and reconnecting...")
         
         // 新しいプロフィール情報でPeerIDを更新
-        self.myPeerID = MCPeerID(displayName: profileManager.getPeerDisplayName())
+        self.myPeerID = MCPeerID(displayName: userProfileManager.getPeerDisplayName())
         
         // 既存の接続を切断
         disconnect()
@@ -269,12 +344,6 @@ class MultipeerManager: NSObject, ObservableObject {
             print("✨ Profile updated with new session: \(self.myPeerID.displayName)")
         }
     }
-    
-    // プロフィールマネージャーへのアクセサ
-    var userProfileManager: UserProfileManager {
-        return profileManager
-    }
-    
     // MARK: - Settings
     func openAppSettings() {
         if let settingsUrl = URL(string: UIApplication.openSettingsURLString) {
@@ -338,17 +407,23 @@ extension MultipeerManager: MCSessionDelegate {
         
         do {
             let message = try JSONDecoder().decode(ChatMessage.self, from: data)
+            // 受信したメッセージをそのまま使用（isFromMeはfalseに設定）
             let receivedMessage = ChatMessage(
-                content: message.content,
+                messageType: message.messageType,
                 senderID: message.senderID,
                 isFromMe: false,
-                senderDisplayName: message.senderDisplayName,
-                senderProfile: message.senderIconType != nil ? 
-                    UserProfile(displayName: message.senderDisplayName ?? "ユーザー", iconType: message.senderIconType!) : nil
+                senderProfile: message.senderProfile
             )
             DispatchQueue.main.async {
                 self.receivedMessages.append(receivedMessage)
-                print("📥 Message received: \(message.content)")
+                switch message.messageType {
+                case .text(let text):
+                    print("📥 Text message received: \(text)")
+                case .image:
+                    print("📥 Image message received")
+                case .imageWithText(_, let text):
+                    print("📥 Image with text message received: \(text)")
+                }
             }
         } catch {
             print("⚠️ Failed to decode message from \(peerID.displayName): \(error)")

@@ -58,6 +58,8 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>QRコードを読み取るためにカメラへのアクセスが必要です</string>
+	<key>NSPhotoLibraryAddUsageDescription</key>
+	<string>チャットで受信した画像を写真ライブラリに保存するためのアクセスが必要です</string>
 	<key>NSLocalNetworkUsageDescription</key>
 	<string>近くのデバイスと接続するためにローカルネットワークへのアクセスが必要です</string>
 	<key>NSBonjourServices</key>
