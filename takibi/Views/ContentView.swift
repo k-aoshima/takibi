@@ -344,9 +344,9 @@ struct ChatView: View {
         }
         // 写真選択機能
         .photosPicker(isPresented: $isShowingPhotoPicker, selection: $photoPickerItem, matching: .images)
-        .onChange(of: photoPickerItem) { newItem in
+        .onChange(of: photoPickerItem) {
             Task {
-                if let data = try? await newItem?.loadTransferable(type: Data.self) {
+                if let data = try? await photoPickerItem?.loadTransferable(type: Data.self) {
                     selectedImageData = data
                 }
             }

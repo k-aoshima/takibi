@@ -22,6 +22,11 @@ struct ChatMessage: Identifiable, Codable {
     let isFromMe: Bool
     let senderProfile: UserProfile
     
+    // Codableの実装でidを除外
+    enum CodingKeys: String, CodingKey {
+        case messageType, senderID, timestamp, isFromMe, senderProfile
+    }
+    
     // テキストメッセージ用イニシャライザー
     init(text: String, senderID: String, isFromMe: Bool = false, senderProfile: UserProfile) {
         self.messageType = .text(text)
