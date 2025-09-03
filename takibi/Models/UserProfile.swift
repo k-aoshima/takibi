@@ -16,6 +16,9 @@ enum ProfileIconType: Codable {
 struct UserProfile: Codable {
     var displayName: String
     var iconType: ProfileIconType
+    var bio: String?
+    var location: String?
+    var birthdate: Date?
     
     // 後方互換性のための計算プロパティ
     var iconName: String {
@@ -36,19 +39,28 @@ struct UserProfile: Codable {
         }
     }
     
-    init(displayName: String = "ユーザー", iconName: String = "person.circle.fill", iconColor: Color = .blue) {
+    init(displayName: String = "ユーザー", iconName: String = "person.circle.fill", iconColor: Color = .blue, bio: String? = nil, location: String? = nil, birthdate: Date? = nil) {
         self.displayName = displayName
         self.iconType = .systemIcon(name: iconName, color: CodableColor(color: iconColor))
+        self.bio = bio
+        self.location = location
+        self.birthdate = birthdate
     }
     
-    init(displayName: String, customImageData: Data) {
+    init(displayName: String, customImageData: Data, bio: String? = nil, location: String? = nil, birthdate: Date? = nil) {
         self.displayName = displayName
         self.iconType = .customImage(data: customImageData)
+        self.bio = bio
+        self.location = location
+        self.birthdate = birthdate
     }
     
-    init(displayName: String, iconType: ProfileIconType) {
+    init(displayName: String, iconType: ProfileIconType, bio: String? = nil, location: String? = nil, birthdate: Date? = nil) {
         self.displayName = displayName
         self.iconType = iconType
+        self.bio = bio
+        self.location = location
+        self.birthdate = birthdate
     }
 }
 

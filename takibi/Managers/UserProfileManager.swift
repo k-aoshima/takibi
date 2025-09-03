@@ -33,7 +33,10 @@ class UserProfileManager: ObservableObject {
         currentProfile = UserProfile(
             displayName: name,
             iconName: currentProfile.iconName,
-            iconColor: currentProfile.iconColor.color
+            iconColor: currentProfile.iconColor.color,
+            bio: currentProfile.bio,
+            location: currentProfile.location,
+            birthdate: currentProfile.birthdate
         )
         saveProfile()
     }
@@ -41,7 +44,10 @@ class UserProfileManager: ObservableObject {
     func updateCustomImage(_ imageData: Data) {
         currentProfile = UserProfile(
             displayName: currentProfile.displayName,
-            customImageData: imageData
+            customImageData: imageData,
+            bio: currentProfile.bio,
+            location: currentProfile.location,
+            birthdate: currentProfile.birthdate
         )
         saveProfile()
     }
@@ -64,5 +70,24 @@ class UserProfileManager: ObservableObject {
         #endif
         
         return "\(currentProfile.displayName)-\(deviceIdentifier)-\(timestamp)"
+    }
+    
+    // ディスカバリー用のプロフィールデータを生成
+    func getProfileForDiscovery() -> [String: Any] {
+        var profileData: [String: Any] = [
+            "nickname": currentProfile.displayName,
+            "avatarEmoji": currentProfile.iconName,
+            "statusMessage": currentProfile.bio ?? ""
+        ]
+        
+        // 場所と生年月日も追加（オプション）
+        if let location = currentProfile.location {
+            profileData["location"] = location
+        }
+        if let birthdate = currentProfile.birthdate {
+            profileData["birthdate"] = ISO8601DateFormatter().string(from: birthdate)
+        }
+        
+        return profileData
     }
 }

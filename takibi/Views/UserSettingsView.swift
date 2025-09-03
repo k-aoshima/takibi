@@ -16,6 +16,11 @@ struct UserSettingsView: View {
     @State private var photoPickerItem: PhotosPickerItem?
     @Environment(\.dismiss) private var dismiss
     
+    // 新しいフィールド
+    @State private var bio: String
+    @State private var location: String
+    @State private var birthdate: Date
+    
     init(profileManager: UserProfileManager) {
         self.profileManager = profileManager
         self._displayName = State(initialValue: profileManager.currentProfile.displayName)
@@ -26,6 +31,11 @@ struct UserSettingsView: View {
         case .systemIcon:
             self._selectedCustomImage = State(initialValue: nil)
         }
+        
+        // 新しいフィールドの初期化
+        self._bio = State(initialValue: profileManager.currentProfile.bio ?? "")
+        self._location = State(initialValue: profileManager.currentProfile.location ?? "")
+        self._birthdate = State(initialValue: profileManager.currentProfile.birthdate ?? Date())
     }
     
     var body: some View {
@@ -66,6 +76,40 @@ struct UserSettingsView: View {
                     
                     TextField("名前を入力してください", text: $displayName)
                         .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .font(.body)
+                }
+                
+                // 自己紹介セクション
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("自己紹介")
+                        .font(.headline)
+                    
+                    TextEditor(text: $bio)
+                        .frame(height: 80)
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .stroke(Color.gray.opacity(0.5), lineWidth: 1)
+                        )
+                        .font(.body)
+                }
+                
+                // 場所セクション
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("場所")
+                        .font(.headline)
+                    
+                    TextField("場所を入力してください", text: $location)
+                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                        .font(.body)
+                }
+                
+                // 生年月日セクション
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("生年月日")
+                        .font(.headline)
+                    
+                    DatePicker("生年月日を選択", selection: $birthdate, displayedComponents: .date)
+                        .datePickerStyle(.compact)
                         .font(.body)
                 }
                 
@@ -129,14 +173,20 @@ struct UserSettingsView: View {
                            let imageData = customImage.jpegData(compressionQuality: 0.8) {
                             newProfile = UserProfile(
                                 displayName: displayName.isEmpty ? "ユーザー" : displayName,
-                                customImageData: imageData
+                                customImageData: imageData,
+                                bio: bio.isEmpty ? nil : bio,
+                                location: location.isEmpty ? nil : location,
+                                birthdate: birthdate
                             )
                         } else {
                             // カスタム画像がない場合はデフォルトの人アイコンを使用
                             newProfile = UserProfile(
                                 displayName: displayName.isEmpty ? "ユーザー" : displayName,
                                 iconName: "person.circle.fill",
-                                iconColor: .blue
+                                iconColor: .blue,
+                                bio: bio.isEmpty ? nil : bio,
+                                location: location.isEmpty ? nil : location,
+                                birthdate: birthdate
                             )
                         }
                         
