@@ -29,6 +29,7 @@ struct ConnectionView: View {
     @State private var isBrowsing = false
     @State private var showingQRCode = false
     @State private var showingQRScanner = false
+    @State private var showingUserSettings = false
     @State private var scannedCode = ""
     
     var body: some View {
@@ -147,12 +148,30 @@ struct ConnectionView: View {
         }
         .padding()
         .navigationTitle("Connect")
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showingUserSettings = true
+                }) {
+                    // 現在のユーザープロフィールのアイコンを表示
+                    let profile = multipeerManager.userProfileManager.currentProfile
+                    ProfileImageView(profile: profile, size: 28)
+                }
+            }
+        }
         .sheet(isPresented: $showingQRCode) {
             QRCodeDisplayView()
                 .environmentObject(multipeerManager)
         }
         .sheet(isPresented: $showingQRScanner) {
             QRCodeScannerView(scannedCode: $scannedCode)
+        }
+        .sheet(isPresented: $showingUserSettings) {
+            UserSettingsView(profileManager: multipeerManager.userProfileManager)
+                .onDisappear {
+                    // プロフィール変更後にPeerIDを更新
+                    multipeerManager.updateProfileAndReconnect()
+                }
         }
         .onChange(of: scannedCode) { oldValue, newValue in
             if !newValue.isEmpty {
@@ -187,6 +206,8 @@ struct ConnectionView: View {
 struct ChatView: View {
     @ObservedObject var multipeerManager: MultipeerManager
     @State private var messageText = ""
+    @State private var showingUserSettings = false
+    @FocusState private var isTextFieldFocused: Bool
     
     var body: some View {
         VStack {
@@ -205,24 +226,42 @@ struct ChatView: View {
             .padding()
             .background(Color.gray.opacity(0.1))
             
-            // Messages list
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
-                    ForEach(multipeerManager.receivedMessages) { message in
-                        MessageBubble(message: message)
+            // Messages list - 新しいMessageRowViewを使用
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 10) {
+                        ForEach(multipeerManager.receivedMessages) { message in
+                            MessageRowView(message: message)
+                                .id(message.id)
+                        }
+                    }
+                    .padding()
+                }
+                .background(Color.gray.opacity(0.05))
+                .onChange(of: multipeerManager.receivedMessages.count) { _, _ in
+                    // 新しいメッセージが追加されたら自動的に最下部にスクロール
+                    if let lastMessage = multipeerManager.receivedMessages.last {
+                        withAnimation {
+                            proxy.scrollTo(lastMessage.id, anchor: .bottom)
+                        }
                     }
                 }
-                .padding()
             }
-            .background(Color.gray.opacity(0.05))
             
-            // Message input
+            // Message input with improved keyboard handling
             HStack {
-                TextField("Type a message...", text: $messageText)
+                TextField("Type a message...", text: $messageText, axis: .vertical)
                     .textFieldStyle(RoundedBorderTextFieldStyle())
+                    .focused($isTextFieldFocused)
                     .onSubmit {
                         sendMessage()
                     }
+                    .submitLabel(.send)
+                    // キーボード入力の問題を回避するための設定
+                    .autocorrectionDisabled(false)
+                    .textInputAutocapitalization(.sentences)
+                    // 絵文字検索の問題を回避
+                    .keyboardType(.default)
                 
                 Button(action: sendMessage) {
                     Image(systemName: "paperplane.fill")
@@ -237,68 +276,41 @@ struct ChatView: View {
         }
         .navigationTitle("Chat")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .navigationBarTrailing) {
+                Button(action: {
+                    showingUserSettings = true
+                }) {
+                    // 現在のユーザープロフィールのアイコンを表示
+                    let profile = multipeerManager.userProfileManager.currentProfile
+                    ProfileImageView(profile: profile, size: 28)
+                }
+            }
+        }
+        .sheet(isPresented: $showingUserSettings) {
+            UserSettingsView(profileManager: multipeerManager.userProfileManager)
+                .onDisappear {
+                    // プロフィール変更後にPeerIDを更新
+                    multipeerManager.updateProfileAndReconnect()
+                }
+        }
+        // キーボードが表示されたときの処理を改善
+        .onTapGesture {
+            // キーボード以外の場所をタップしたらフォーカスを外す
+            isTextFieldFocused = false
+        }
+        // アプリがバックグラウンドに移行する際のキーボード状態管理
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.willResignActiveNotification)) { _ in
+            isTextFieldFocused = false
+        }
     }
     
     private func sendMessage() {
         guard !messageText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
         multipeerManager.sendMessage(messageText)
         messageText = ""
-    }
-}
-
-struct MessageBubble: View {
-    let message: ChatMessage
-    
-    var body: some View {
-        HStack {
-            if message.isFromMe {
-                // 自分のメッセージ：右寄せ
-                Spacer(minLength: 60)
-                
-                VStack(alignment: .trailing, spacing: 4) {
-                    Text(message.content)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color.blue)
-                        .foregroundColor(.white)
-                        .cornerRadius(18)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                    
-                    Text(formatTime(message.timestamp))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-            } else {
-                // 相手のメッセージ：左寄せ
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(message.senderID)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .padding(.leading, 4)
-                    
-                    Text(message.content)
-                        .padding(.horizontal, 16)
-                        .padding(.vertical, 10)
-                        .background(Color(.systemGray5))
-                        .foregroundColor(.primary)
-                        .cornerRadius(18)
-                        .clipShape(RoundedRectangle(cornerRadius: 18))
-                    
-                    Text(formatTime(message.timestamp))
-                        .font(.caption2)
-                        .foregroundColor(.secondary)
-                }
-                
-                Spacer(minLength: 60)
-            }
-        }
-        .padding(.horizontal, 8)
-    }
-    
-    private func formatTime(_ date: Date) -> String {
-        let formatter = DateFormatter()
-        formatter.timeStyle = .short
-        return formatter.string(from: date)
+        // メッセージ送信後もフォーカスを維持
+        isTextFieldFocused = true
     }
 }
 
