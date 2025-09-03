@@ -10,9 +10,9 @@ import Photos
 
 struct MessageRowView: View {
     let message: ChatMessage
+        @State private var showingImageFullScreen = false
     @State private var showingSaveAlert = false
     @State private var saveError: String?
-    @State private var imageSaver: ImageSaver?
     
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
@@ -54,6 +54,11 @@ struct MessageRowView: View {
                 Text("画像が写真ライブラリに保存されました。")
             }
         }
+        .sheet(isPresented: $showingImageFullScreen) {
+            if let imageData = message.imageData, let image = UIImage(data: imageData) {
+                FullScreenImageView(image: image)
+            }
+        }
     }
     
     private var messageContent: some View {
@@ -66,6 +71,9 @@ struct MessageRowView: View {
                     .cornerRadius(8)
                     .padding(.horizontal, 8)
                     .padding(.top, 8)
+                    .onTapGesture {
+                        showingImageFullScreen = true
+                    }
                     .contextMenu {
                         Button(action: {
                             saveImageToPhotos(image: image)
@@ -101,18 +109,19 @@ struct MessageRowView: View {
             DispatchQueue.main.async {
                 switch status {
                 case .authorized, .limited:
-                    // ImageSaverインスタンスを作成
-                    let saver = ImageSaver { success, error in
-                        if success {
-                            self.saveError = nil
-                        } else {
-                            self.saveError = error?.localizedDescription ?? "画像の保存に失敗しました"
+                    // PHPhotoLibraryを使用して画像を保存
+                    PHPhotoLibrary.shared().performChanges({
+                        PHAssetCreationRequest.creationRequestForAsset(from: image)
+                    }) { success, error in
+                        DispatchQueue.main.async {
+                            if success {
+                                self.saveError = nil
+                            } else {
+                                self.saveError = error?.localizedDescription ?? "画像の保存に失敗しました"
+                            }
+                            self.showingSaveAlert = true
                         }
-                        self.showingSaveAlert = true
                     }
-                    self.imageSaver = saver
-                    // 写真を保存
-                    UIImageWriteToSavedPhotosAlbum(image, saver, #selector(ImageSaver.saveCompleted), nil)
                 case .denied, .restricted:
                     self.saveError = "写真ライブラリへのアクセスが拒否されています。設定から許可してください。"
                     self.showingSaveAlert = true
@@ -127,19 +136,6 @@ struct MessageRowView: View {
         }
     }
 }
-
-class ImageSaver: NSObject {
-    var completion: (Bool, Error?) -> Void
-    
-    init(completion: @escaping (Bool, Error?) -> Void) {
-        self.completion = completion
-    }
-    
-    @objc func saveCompleted(_ image: UIImage, didFinishSavingWithError error: Error?, contextInfo: UnsafeRawPointer) {
-        completion(error == nil, error)
-    }
-}
-
 #Preview {
     VStack(spacing: 10) {
         MessageRowView(message: ChatMessage(
@@ -157,4 +153,127 @@ class ImageSaver: NSObject {
         ))
     }
     .padding()
+}
+
+struct FullScreenImageView: View {
+    let image: UIImage
+    @Environment(\.dismiss) private var dismiss
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var offset: CGSize = .zero
+    @State private var lastOffset: CGSize = .zero
+    @State private var showingSaveAlert = false
+    @State private var saveError: String?
+    
+    var body: some View {
+        NavigationView {
+            GeometryReader { geometry in
+                ScrollView([.horizontal, .vertical], showsIndicators: false) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .frame(width: geometry.size.width * scale, height: geometry.size.height * scale)
+                        .offset(offset)
+                        .scaleEffect(scale)
+                        .onTapGesture(count: 2) {
+                            // ダブルタップでズーム切り替え
+                            withAnimation(.spring()) {
+                                if scale > 1.0 {
+                                    scale = 1.0
+                                    offset = .zero
+                                } else {
+                                    scale = 2.0
+                                }
+                            }
+                        }
+                        .gesture(
+                            SimultaneousGesture(
+                                MagnificationGesture()
+                                    .onChanged { value in
+                                        scale = lastScale * value
+                                    }
+                                    .onEnded { _ in
+                                        lastScale = scale
+                                        if scale < 1.0 {
+                                            withAnimation(.spring()) {
+                                                scale = 1.0
+                                                lastScale = 1.0
+                                            }
+                                        }
+                                    },
+                                DragGesture()
+                                    .onChanged { value in
+                                        offset = CGSize(
+                                            width: lastOffset.width + value.translation.width,
+                                            height: lastOffset.height + value.translation.height
+                                        )
+                                    }
+                                    .onEnded { _ in
+                                        lastOffset = offset
+                                    }
+                            )
+                        )
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black)
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button("閉じる") {
+                        dismiss()
+                    }
+                    .foregroundColor(.white)
+                }
+                
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button(action: {
+                        saveImageToPhotos(image: image)
+                    }) {
+                        Image(systemName: "square.and.arrow.down")
+                            .foregroundColor(.white)
+                    }
+                }
+            }
+            .toolbarBackground(Color.black.opacity(0.5), for: .navigationBar)
+        }
+        .alert("画像保存", isPresented: $showingSaveAlert) {
+            Button("OK") { }
+        } message: {
+            Text(saveError ?? "画像が写真ライブラリに保存されました")
+        }
+    }
+    
+    private func saveImageToPhotos(image: UIImage) {
+        // 写真ライブラリへのアクセス許可を確認
+        PHPhotoLibrary.requestAuthorization(for: .addOnly) { status in
+            DispatchQueue.main.async {
+                switch status {
+                case .authorized, .limited:
+                    // PHPhotoLibraryを使用して画像を保存
+                    PHPhotoLibrary.shared().performChanges({
+                        PHAssetCreationRequest.creationRequestForAsset(from: image)
+                    }) { success, error in
+                        DispatchQueue.main.async {
+                            if success {
+                                self.saveError = nil
+                            } else {
+                                self.saveError = error?.localizedDescription ?? "画像の保存に失敗しました"
+                            }
+                            self.showingSaveAlert = true
+                        }
+                    }
+                case .denied, .restricted:
+                    self.saveError = "写真ライブラリへのアクセスが拒否されています。設定から許可してください。"
+                    self.showingSaveAlert = true
+                case .notDetermined:
+                    self.saveError = "写真ライブラリへのアクセス許可が必要です。"
+                    self.showingSaveAlert = true
+                @unknown default:
+                    self.saveError = "不明なエラーが発生しました。"
+                    self.showingSaveAlert = true
+                }
+            }
+        }
+    }
 }
